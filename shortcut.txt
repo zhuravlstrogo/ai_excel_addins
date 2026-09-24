@@ -1,0 +1,9 @@
+Private Sub Workbook_Open()
+    Application.OnKey "^+j", "LLM_ProcessSelection"   ' Ctrl+Shift+J
+    Application.OnKey "^+k", "LLM_Chat"               ' Ctrl+Shift+K
+End Sub
+ 
+Private Sub Workbook_BeforeClose(Cancel As Boolean)
+    Application.OnKey "^+j"
+    Application.OnKey "^+k"
+End Sub

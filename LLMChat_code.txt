@@ -1,0 +1,482 @@
+' =============================================================================
+'  Code for UserForm "frmLLMChat"  -  version 3  (paste into the form's code window)
+'  All controls are created at runtime - the form itself stays empty.
+'  Russian captions are stored as \uXXXX escapes and decoded by RU() from the module,
+'  because the VBA editor breaks Cyrillic on import/paste on some Windows locales.
+' =============================================================================
+Option Explicit
+
+' --- main window ---
+Private WithEvents txtInput As MSForms.TextBox
+Private WithEvents cboPreset As MSForms.ComboBox
+Private WithEvents btnSend As MSForms.CommandButton
+Private WithEvents btnExplain As MSForms.CommandButton
+Private WithEvents btnNew As MSForms.CommandButton
+Private WithEvents btnFormula As MSForms.CommandButton
+Private WithEvents btnInsert As MSForms.CommandButton
+Private WithEvents btnUndo As MSForms.CommandButton
+Private WithEvents btnSaveChat As MSForms.CommandButton
+Private WithEvents btnSettings As MSForms.CommandButton
+Private WithEvents btnCache As MSForms.CommandButton
+Private txtHistory As MSForms.TextBox
+Private cboModel As MSForms.ComboBox
+Private cboContext As MSForms.ComboBox
+Private chkAgent As MSForms.CheckBox
+Private lblStatus As MSForms.Label
+
+' --- settings panel ---
+Private fraSettings As MSForms.Frame
+Private WithEvents btnSaveSettings As MSForms.CommandButton
+Private WithEvents btnCloseSettings As MSForms.CommandButton
+Private sURL As MSForms.TextBox
+Private sKey As MSForms.TextBox
+Private sModel As MSForms.TextBox
+Private sList As MSForms.TextBox
+Private sLang As MSForms.TextBox
+Private sTemp As MSForms.TextBox
+Private sChatTok As MSForms.TextBox
+Private sCellTok As MSForms.TextBox
+Private sInstr As MSForms.TextBox
+
+Private mCtxLabel As String
+Private mPresetText(1 To 8) As String
+Private mPresetAgent(1 To 8) As Boolean
+
+' names shown in the chat history
+Private Function WhoYou() As String
+    WhoYou = RU("\u0412\u044B")
+End Function
+
+Private Function WhoAI() As String
+    WhoAI = RU("\u0418\u0418")
+End Function
+
+Private Function ExplainPrompt() As String
+    ExplainPrompt = RU("\u041E\u0431\u044A\u044F\u0441\u043D\u0438 \u043F\u0440\u0438\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0435 \u044F\u0447\u0435\u0439\u043A\u0438: \u0447\u0442\u043E \u043E\u0437\u043D\u0430\u0447\u0430\u044E\u0442 \u0434\u0430\u043D\u043D\u044B\u0435 \u0438 \u0447\u0442\u043E \u0441\u0447\u0438\u0442\u0430\u0435\u0442 \u043A\u0430\u0436\u0434\u0430\u044F \u0444\u043E\u0440\u043C\u0443\u043B\u0430. ") & _
+                    RU("\u0423\u043A\u0430\u0436\u0438 \u0432\u043E\u0437\u043C\u043E\u0436\u043D\u044B\u0435 \u043E\u0448\u0438\u0431\u043A\u0438.")
+End Function
+
+
+' ============================== BUILD UI =====================================
+
+Private Sub UserForm_Initialize()
+    Me.Caption = RU("\u0418\u0418-\u0430\u0441\u0441\u0438\u0441\u0442\u0435\u043D\u0442 (LiteLLM)")
+    Me.Width = 392
+    Me.Height = 490
+
+    ' row 1: model + data
+    AddLabel Me, RU("\u041C\u043E\u0434\u0435\u043B\u044C:"), 6, 9, 42
+    Set cboModel = Me.Controls.Add("Forms.ComboBox.1")
+    With cboModel
+        .Left = 48: .Top = 6: .Width = 144
+        .Style = fmStyleDropDownCombo
+    End With
+    FillModels
+
+    AddLabel Me, RU("\u0414\u0430\u043D\u043D\u044B\u0435:"), 198, 9, 42
+    Set cboContext = Me.Controls.Add("Forms.ComboBox.1")
+    With cboContext
+        .Left = 240: .Top = 6: .Width = 136
+        .Style = fmStyleDropDownList
+        .AddItem RU("\u0412\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u044F\u0447\u0435\u0439\u043A\u0438")
+        .AddItem RU("\u0412\u0435\u0441\u044C \u043B\u0438\u0441\u0442")
+        .AddItem RU("\u041E\u0431\u0437\u043E\u0440 \u043A\u043D\u0438\u0433\u0438")
+        .AddItem RU("\u0411\u0435\u0437 \u0434\u0430\u043D\u043D\u044B\u0445")
+        .ListIndex = 0
+    End With
+
+    ' row 2: quick actions + agent mode
+    AddLabel Me, RU("\u0428\u0430\u0431\u043B\u043E\u043D:"), 6, 33, 42
+    Set cboPreset = Me.Controls.Add("Forms.ComboBox.1")
+    With cboPreset
+        .Left = 48: .Top = 30: .Width = 216
+        .Style = fmStyleDropDownList
+    End With
+    FillPresets
+
+    Set chkAgent = Me.Controls.Add("Forms.CheckBox.1")
+    With chkAgent
+        .Left = 270: .Top = 30: .Width = 106: .Height = 18
+        .Caption = RU("\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044C \u043F\u0440\u0430\u0432\u043A\u0438")
+        .Value = False
+    End With
+
+    ' history + input
+    Set txtHistory = Me.Controls.Add("Forms.TextBox.1")
+    With txtHistory
+        .Left = 6: .Top = 54: .Width = 370: .Height = 213
+        .MultiLine = True: .WordWrap = True
+        .ScrollBars = fmScrollBarsVertical
+        .Locked = True
+        .BackColor = &HF6F6F6
+    End With
+
+    Set txtInput = Me.Controls.Add("Forms.TextBox.1")
+    With txtInput
+        .Left = 6: .Top = 273: .Width = 370: .Height = 70
+        .MultiLine = True: .WordWrap = True
+        .EnterKeyBehavior = True
+        .ScrollBars = fmScrollBarsVertical
+    End With
+
+    ' buttons
+    Set btnSend = AddButton(Me, RU("\u041E\u0442\u043F\u0440\u0430\u0432\u0438\u0442\u044C (Ctrl+Enter)"), 6, 349, 121)
+    Set btnExplain = AddButton(Me, RU("\u041E\u0431\u044A\u044F\u0441\u043D\u0438\u0442\u044C \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u043E\u0435"), 131, 349, 121)
+    Set btnNew = AddButton(Me, RU("\u041D\u043E\u0432\u044B\u0439 \u0447\u0430\u0442"), 256, 349, 120)
+    Set btnFormula = AddButton(Me, RU("\u0424\u043E\u0440\u043C\u0443\u043B\u0430 \u0432 \u044F\u0447\u0435\u0439\u043A\u0443"), 6, 377, 121)
+    Set btnInsert = AddButton(Me, RU("\u041E\u0442\u0432\u0435\u0442 \u0432 \u044F\u0447\u0435\u0439\u043A\u0438"), 131, 377, 121)
+    Set btnUndo = AddButton(Me, RU("\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C \u043F\u0440\u0430\u0432\u043A\u0438 \u0418\u0418"), 256, 377, 120)
+    Set btnSaveChat = AddButton(Me, RU("\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C \u0447\u0430\u0442 \u043D\u0430 \u043B\u0438\u0441\u0442"), 6, 405, 121)
+    Set btnSettings = AddButton(Me, RU("\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438"), 131, 405, 121)
+    Set btnCache = AddButton(Me, RU("\u041E\u0447\u0438\u0441\u0442\u0438\u0442\u044C \u043A\u044D\u0448 =LLM"), 256, 405, 120)
+
+    Set lblStatus = AddLabel(Me, RU("\u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u044F\u0447\u0435\u0439\u043A\u0438, \u043D\u0430\u043F\u0438\u0448\u0438\u0442\u0435 \u0432\u043E\u043F\u0440\u043E\u0441 \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 Ctrl+Enter."), 6, 435, 370)
+
+    BuildSettingsPanel
+End Sub
+
+Private Sub BuildSettingsPanel()
+    Dim t As Single
+    Set fraSettings = Me.Controls.Add("Forms.Frame.1")
+    With fraSettings
+        .Left = 6: .Top = 54: .Width = 370: .Height = 378
+        .Caption = RU("\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 (\u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F \u0434\u043B\u044F \u0432\u0430\u0448\u0435\u0433\u043E \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F Windows)")
+        .Visible = False
+    End With
+
+    t = 6
+    Set sURL = AddSetting(RU("\u0410\u0434\u0440\u0435\u0441 LiteLLM:"), t): t = t + 26
+    Set sKey = AddSetting(RU("API-\u043A\u043B\u044E\u0447:"), t): t = t + 26
+    sKey.PasswordChar = "*"
+    Set sModel = AddSetting(RU("\u041C\u043E\u0434\u0435\u043B\u044C \u043F\u043E \u0443\u043C\u043E\u043B\u0447\u0430\u043D\u0438\u044E:"), t): t = t + 26
+    Set sList = AddSetting(RU("\u0421\u043F\u0438\u0441\u043E\u043A \u043C\u043E\u0434\u0435\u043B\u0435\u0439 (a,b,c):"), t): t = t + 26
+    Set sLang = AddSetting(RU("\u042F\u0437\u044B\u043A \u043E\u0442\u0432\u0435\u0442\u043E\u0432:"), t): t = t + 26
+    Set sTemp = AddSetting(RU("\u0422\u0435\u043C\u043F\u0435\u0440\u0430\u0442\u0443\u0440\u0430 (\u043F\u0443\u0441\u0442\u043E = \u0430\u0432\u0442\u043E):"), t): t = t + 26
+    Set sChatTok = AddSetting(RU("\u041C\u0430\u043A\u0441. \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0432 \u0447\u0430\u0442\u0435:"), t): t = t + 26
+    Set sCellTok = AddSetting(RU("\u041C\u0430\u043A\u0441. \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0434\u043B\u044F =LLM:"), t): t = t + 26
+
+    AddLabel fraSettings, RU("\u0418\u043D\u0441\u0442\u0440\u0443\u043A\u0446\u0438\u0438 \u0434\u043B\u044F \u043A\u0430\u0436\u0434\u043E\u0433\u043E \u0437\u0430\u043F\u0440\u043E\u0441\u0430 (\u0440\u043E\u043B\u044C, \u0441\u0442\u0438\u043B\u044C, \u043F\u0440\u0430\u0432\u0438\u043B\u0430):"), 6, t, 350
+    t = t + 14
+    Set sInstr = fraSettings.Controls.Add("Forms.TextBox.1")
+    With sInstr
+        .Left = 6: .Top = t: .Width = 352: .Height = 56
+        .MultiLine = True: .WordWrap = True: .EnterKeyBehavior = True
+        .ScrollBars = fmScrollBarsVertical
+    End With
+    t = t + 62
+
+    AddLabel fraSettings, RU("API-\u043A\u043B\u044E\u0447 \u0445\u0440\u0430\u043D\u0438\u0442\u0441\u044F \u0432 \u0440\u0435\u0435\u0441\u0442\u0440\u0435 Windows \u0442\u043E\u043B\u044C\u043A\u043E \u0434\u043B\u044F \u0432\u0430\u0448\u0435\u0433\u043E \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F"), 6, t, 350
+    t = t + 16
+    Set btnSaveSettings = AddButton(fraSettings, RU("\u0421\u043E\u0445\u0440\u0430\u043D\u0438\u0442\u044C"), 6, t, 100)
+    Set btnCloseSettings = AddButton(fraSettings, RU("\u041E\u0442\u043C\u0435\u043D\u0430"), 112, t, 100)
+End Sub
+
+Private Function AddSetting(ByVal cap As String, ByVal t As Single) As MSForms.TextBox
+    Dim tb As MSForms.TextBox
+    AddLabel fraSettings, cap, 6, t + 3, 140
+    Set tb = fraSettings.Controls.Add("Forms.TextBox.1")
+    tb.Left = 148: tb.Top = t: tb.Width = 210: tb.Height = 18
+    Set AddSetting = tb
+End Function
+
+Private Sub FillModels()
+    Dim m As Variant
+    cboModel.Clear
+    For Each m In Split(Setting("ModelList"), ",")
+        If Len(Trim$(m)) > 0 Then cboModel.AddItem Trim$(m)
+    Next m
+    cboModel.Text = Setting("Model")
+End Sub
+
+Private Sub FillPresets()
+    cboPreset.AddItem RU("(\u0432\u044B\u0431\u0435\u0440\u0438\u0442\u0435 \u0433\u043E\u0442\u043E\u0432\u044B\u0439 \u0437\u0430\u043F\u0440\u043E\u0441...)")
+    AddPreset 1, RU("\u0421\u0432\u043E\u0434\u043A\u0430 \u043F\u043E \u0434\u0430\u043D\u043D\u044B\u043C"), False, _
+        RU("\u041A\u0440\u0430\u0442\u043A\u043E \u043E\u043F\u0438\u0448\u0438 \u0434\u0430\u043D\u043D\u044B\u0435: \u0447\u0442\u043E \u044D\u0442\u043E, \u043A\u043B\u044E\u0447\u0435\u0432\u044B\u0435 \u043F\u043E\u043A\u0430\u0437\u0430\u0442\u0435\u043B\u0438, \u0442\u0440\u0435\u043D\u0434\u044B \u0438 \u0432\u044B\u0431\u0440\u043E\u0441\u044B.")
+    AddPreset 2, RU("\u041F\u0440\u043E\u0432\u0435\u0440\u0438\u0442\u044C \u0444\u043E\u0440\u043C\u0443\u043B\u044B"), False, _
+        RU("\u041F\u0440\u043E\u0432\u0435\u0440\u044C \u0444\u043E\u0440\u043C\u0443\u043B\u044B: \u043E\u0448\u0438\u0431\u043A\u0438, \u0431\u0438\u0442\u044B\u0435 \u0441\u0441\u044B\u043B\u043A\u0438, \u043D\u0435\u0441\u043E\u0433\u043B\u0430\u0441\u043E\u0432\u0430\u043D\u043D\u043E\u0441\u0442\u044C \u043C\u0435\u0436\u0434\u0443 \u0441\u0442\u0440\u043E\u043A\u0430\u043C\u0438. ") & _
+        RU("\u0423\u043A\u0430\u0436\u0438 \u0430\u0434\u0440\u0435\u0441\u0430 \u044F\u0447\u0435\u0435\u043A \u0438 \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0438 \u0438\u0441\u043F\u0440\u0430\u0432\u043B\u0435\u043D\u0438\u044F.")
+    AddPreset 3, RU("\u041D\u0430\u0439\u0442\u0438 \u0434\u0443\u0431\u043B\u0438 \u0438 \u043E\u043F\u0435\u0447\u0430\u0442\u043A\u0438"), False, _
+        RU("\u041D\u0430\u0439\u0434\u0438 \u043F\u043E\u0432\u0442\u043E\u0440\u044F\u044E\u0449\u0438\u0435\u0441\u044F \u0441\u0442\u0440\u043E\u043A\u0438 \u0438 \u0440\u0430\u0437\u043D\u044B\u0435 \u043D\u0430\u043F\u0438\u0441\u0430\u043D\u0438\u044F \u043E\u0434\u043D\u0438\u0445 \u0438 \u0442\u0435\u0445 \u0436\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0439. \u0423\u043A\u0430\u0436\u0438 \u0430\u0434\u0440\u0435\u0441\u0430 \u044F\u0447\u0435\u0435\u043A.")
+    AddPreset 4, RU("[\u043F\u0440\u0430\u0432\u043A\u0430] \u041E\u0447\u0438\u0441\u0442\u0438\u0442\u044C \u0438 \u043F\u0440\u0438\u0432\u0435\u0441\u0442\u0438 \u043A \u043E\u0434\u043D\u043E\u043C\u0443 \u0432\u0438\u0434\u0443"), True, _
+        RU("\u041E\u0447\u0438\u0441\u0442\u0438 \u0438 \u043F\u0440\u0438\u0432\u0435\u0434\u0438 \u043A \u043E\u0434\u043D\u043E\u043C\u0443 \u0432\u0438\u0434\u0443 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0435 \u0434\u0430\u043D\u043D\u044B\u0435: \u0443\u0431\u0435\u0440\u0438 \u043B\u0438\u0448\u043D\u0438\u0435 \u043F\u0440\u043E\u0431\u0435\u043B\u044B, ") & _
+        RU("\u0432\u044B\u0440\u043E\u0432\u043D\u044F\u0439 \u0440\u0435\u0433\u0438\u0441\u0442\u0440, \u0444\u043E\u0440\u043C\u0430\u0442\u044B \u0434\u0430\u0442 \u0438 \u0447\u0438\u0441\u0435\u043B. \u0417\u0430\u043F\u0438\u0448\u0438 \u043E\u0447\u0438\u0449\u0435\u043D\u043D\u044B\u0435 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u044F \u0432 \u0442\u0435 \u0436\u0435 \u044F\u0447\u0435\u0439\u043A\u0438.")
+    AddPreset 5, RU("[\u043F\u0440\u0430\u0432\u043A\u0430] \u0421\u0432\u043E\u0434\u043D\u0430\u044F \u0442\u0430\u0431\u043B\u0438\u0446\u0430 \u043D\u0430 \u043D\u043E\u0432\u043E\u043C \u043B\u0438\u0441\u0442\u0435"), True, _
+        RU("\u0421\u043E\u0437\u0434\u0430\u0439 \u043D\u0430 \u043D\u043E\u0432\u043E\u043C \u043B\u0438\u0441\u0442\u0435 \u0441\u0432\u043E\u0434\u043D\u0443\u044E \u0442\u0430\u0431\u043B\u0438\u0446\u0443 \u0441 \u0438\u0442\u043E\u0433\u0430\u043C\u0438 \u043F\u043E \u043E\u0441\u043D\u043E\u0432\u043D\u043E\u0439 \u043A\u0430\u0442\u0435\u0433\u043E\u0440\u0438\u0438. ") & _
+        RU("\u0418\u0441\u043F\u043E\u043B\u044C\u0437\u0443\u0439 \u0444\u043E\u0440\u043C\u0443\u043B\u044B \u0441\u043E \u0441\u0441\u044B\u043B\u043A\u0430\u043C\u0438 \u043D\u0430 \u0438\u0441\u0445\u043E\u0434\u043D\u044B\u0435 \u0434\u0430\u043D\u043D\u044B\u0435.")
+    AddPreset 6, RU("[\u043F\u0440\u0430\u0432\u043A\u0430] \u041F\u043E\u0441\u0442\u0440\u043E\u0438\u0442\u044C \u0434\u0438\u0430\u0433\u0440\u0430\u043C\u043C\u0443"), True, _
+        RU("\u0412\u044B\u0431\u0435\u0440\u0438 \u043F\u043E\u0434\u0445\u043E\u0434\u044F\u0449\u0438\u0439 \u0442\u0438\u043F \u0434\u0438\u0430\u0433\u0440\u0430\u043C\u043C\u044B \u0434\u043B\u044F \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0445 \u0434\u0430\u043D\u043D\u044B\u0445 \u0438 \u043F\u043E\u0441\u0442\u0440\u043E\u0439 \u0435\u0451 \u0440\u044F\u0434\u043E\u043C \u0441 \u0434\u0430\u043D\u043D\u044B\u043C\u0438.")
+    AddPreset 7, RU("[\u043F\u0440\u0430\u0432\u043A\u0430] \u041E\u0444\u043E\u0440\u043C\u0438\u0442\u044C \u043A\u0430\u043A \u043E\u0442\u0447\u0451\u0442"), True, _
+        RU("\u041E\u0444\u043E\u0440\u043C\u0438 \u0432\u044B\u0434\u0435\u043B\u0435\u043D\u043D\u044B\u0439 \u0434\u0438\u0430\u043F\u0430\u0437\u043E\u043D \u043A\u0430\u043A \u043E\u0442\u0447\u0451\u0442: \u0436\u0438\u0440\u043D\u0430\u044F \u0448\u0430\u043F\u043A\u0430 \u0441 \u0437\u0430\u043B\u0438\u0432\u043A\u043E\u0439, \u0433\u0440\u0430\u043D\u0438\u0446\u044B, ") & _
+        RU("\u0447\u0438\u0441\u043B\u043E\u0432\u044B\u0435 \u0444\u043E\u0440\u043C\u0430\u0442\u044B, \u0430\u0432\u0442\u043E\u0448\u0438\u0440\u0438\u043D\u0430 \u0441\u0442\u043E\u043B\u0431\u0446\u043E\u0432.")
+    AddPreset 8, RU("[\u043F\u0440\u0430\u0432\u043A\u0430] \u0414\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u0432\u044B\u0447\u0438\u0441\u043B\u044F\u0435\u043C\u044B\u0439 \u0441\u0442\u043E\u043B\u0431\u0435\u0446"), True, _
+        RU("\u0414\u043E\u0431\u0430\u0432\u044C \u0441\u043F\u0440\u0430\u0432\u0430 \u043E\u0442 \u0434\u0430\u043D\u043D\u044B\u0445 \u043D\u043E\u0432\u044B\u0439 \u0441\u0442\u043E\u043B\u0431\u0435\u0446 \u0441 \u0437\u0430\u0433\u043E\u043B\u043E\u0432\u043A\u043E\u043C \u0438 \u0444\u043E\u0440\u043C\u0443\u043B\u043E\u0439, \u043A\u043E\u0442\u043E\u0440\u0430\u044F \u0441\u0447\u0438\u0442\u0430\u0435\u0442: ")
+    cboPreset.ListIndex = 0
+End Sub
+
+Private Sub AddPreset(ByVal i As Long, ByVal title As String, ByVal agent As Boolean, ByVal text As String)
+    cboPreset.AddItem title
+    mPresetText(i) = text
+    mPresetAgent(i) = agent
+End Sub
+
+
+' =============================== EVENTS ======================================
+
+Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
+    If CloseMode = vbFormControlMenu Then     ' hide, keep the conversation
+        Cancel = True
+        Me.Hide
+    End If
+End Sub
+
+Private Sub txtInput_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)
+    If KeyCode = vbKeyReturn And (Shift And 2) = 2 Then      ' Ctrl+Enter
+        KeyCode = 0
+        DoSend txtInput.Text, False, True
+    End If
+End Sub
+
+Private Sub cboPreset_Change()
+    Dim i As Long
+    i = cboPreset.ListIndex
+    If i < 1 Then Exit Sub
+    txtInput.Text = mPresetText(i)
+    If mPresetAgent(i) Then chkAgent.Value = True
+    cboPreset.ListIndex = 0
+    txtInput.SetFocus
+    txtInput.SelStart = Len(txtInput.Text)
+End Sub
+
+Private Sub btnSend_Click()
+    DoSend txtInput.Text, False, True
+End Sub
+
+Private Sub btnExplain_Click()
+    DoSend ExplainPrompt(), True, False
+End Sub
+
+Private Sub btnNew_Click()
+    ChatReset
+    txtHistory.Text = ""
+    lblStatus.Caption = RU("\u041D\u0430\u0447\u0430\u0442 \u043D\u043E\u0432\u044B\u0439 \u0447\u0430\u0442.")
+End Sub
+
+Private Sub btnUndo_Click()
+    AppendHistory "Excel", UndoLast()
+End Sub
+
+Private Sub btnSaveChat_Click()
+    If Len(txtHistory.Text) = 0 Then Exit Sub
+    SaveTranscript txtHistory.Text
+    lblStatus.Caption = RU("\u0427\u0430\u0442 \u0441\u043E\u0445\u0440\u0430\u043D\u0451\u043D \u043D\u0430 \u043D\u043E\u0432\u044B\u0439 \u043B\u0438\u0441\u0442.")
+End Sub
+
+Private Sub btnCache_Click()
+    lblStatus.Caption = ClearCache()
+End Sub
+
+Private Sub btnFormula_Click()
+    Dim desc As String, target As Range, f As String, ctx As String
+    desc = Trim$(txtInput.Text)
+    If Len(desc) = 0 Then
+        MsgBox RU("\u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u044F\u0447\u0435\u0439\u043A\u0443 \u0434\u043B\u044F \u0444\u043E\u0440\u043C\u0443\u043B\u044B, \u043E\u043F\u0438\u0448\u0438\u0442\u0435 \u0432 \u043F\u043E\u043B\u0435 \u0432\u0432\u043E\u0434\u0430, \u0447\u0442\u043E \u043D\u0443\u0436\u043D\u043E \u043F\u043E\u0441\u0447\u0438\u0442\u0430\u0442\u044C, ") & _
+               RU("\u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u044D\u0442\u0443 \u043A\u043D\u043E\u043F\u043A\u0443."), vbInformation, RU("\u0418\u0418")
+        Exit Sub
+    End If
+
+    On Error Resume Next
+    Set target = ActiveCell
+    On Error GoTo 0
+    If target Is Nothing Then Exit Sub
+
+    ctx = BuildContext(target.Worksheet.UsedRange, False, True, 30)
+    AppendHistory WhoYou(), RU("[\u0444\u043E\u0440\u043C\u0443\u043B\u0430 \u0434\u043B\u044F ") & target.Address(False, False) & "] " & desc
+    SetBusy True, RU("\u041F\u0438\u0448\u0443 \u0444\u043E\u0440\u043C\u0443\u043B\u0443...")
+    f = MakeFormula(desc, ctx, target.Address(False, False), cboModel.Text)
+    SetBusy False, RU("\u0413\u043E\u0442\u043E\u0432\u043E") & TokensText()
+
+    If Left$(f, 1) <> "=" Then
+        AppendHistory WhoAI(), f
+        Exit Sub
+    End If
+
+    If MsgBox(RU("\u0412\u0441\u0442\u0430\u0432\u0438\u0442\u044C \u0432 ") & target.Address(False, False) & "?" & vbLf & vbLf & f, _
+              vbYesNo + vbQuestion, RU("\u0418\u0418")) = vbYes Then
+        If InsertFormula(target, f) Then
+            AppendHistory WhoAI(), RU("\u0412\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u0432 ") & target.Address(False, False) & ": " & f
+            txtInput.Text = ""
+        Else
+            AppendHistory WhoAI(), RU("Excel \u043D\u0435 \u043F\u0440\u0438\u043D\u044F\u043B \u0444\u043E\u0440\u043C\u0443\u043B\u0443: ") & f
+        End If
+    Else
+        AppendHistory WhoAI(), f
+    End If
+End Sub
+
+Private Sub btnInsert_Click()
+    If Len(LastAnswer) = 0 Then
+        MsgBox RU("\u041E\u0442\u0432\u0435\u0442\u0430 \u043F\u043E\u043A\u0430 \u043D\u0435\u0442."), vbInformation, RU("\u0418\u0418")
+        Exit Sub
+    End If
+    On Error GoTo Fail
+    InsertTextToCells LastAnswer, ActiveCell
+    lblStatus.Caption = RU("\u0412\u0441\u0442\u0430\u0432\u043B\u0435\u043D\u043E \u0432 ") & ActiveCell.Address(False, False) & _
+                        RU(" (\u043A\u043D\u043E\u043F\u043A\u0430 \u00AB\u041E\u0442\u043C\u0435\u043D\u0438\u0442\u044C \u043F\u0440\u0430\u0432\u043A\u0438 \u0418\u0418\u00BB \u0432\u0435\u0440\u043D\u0451\u0442 \u043A\u0430\u043A \u0431\u044B\u043B\u043E)")
+    Exit Sub
+Fail:
+    MsgBox RU("\u041D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u0432\u0441\u0442\u0430\u0432\u0438\u0442\u044C: ") & Err.Description, vbExclamation, RU("\u0418\u0418")
+End Sub
+
+Private Sub btnSettings_Click()
+    sURL.Text = Setting("URL")
+    sKey.Text = Setting("ApiKey")
+    sModel.Text = Setting("Model")
+    sList.Text = Setting("ModelList")
+    sLang.Text = Setting("Language")
+    sTemp.Text = Setting("Temperature")
+    sChatTok.Text = Setting("ChatMaxTokens")
+    sCellTok.Text = Setting("CellMaxTokens")
+    sInstr.Text = Setting("Instructions")
+    txtHistory.Visible = False
+    fraSettings.Visible = True
+End Sub
+
+Private Sub btnSaveSettings_Click()
+    SaveSettingValue "URL", Trim$(sURL.Text)
+    SaveSettingValue "ApiKey", Trim$(sKey.Text)
+    SaveSettingValue "Model", Trim$(sModel.Text)
+    SaveSettingValue "ModelList", Trim$(sList.Text)
+    SaveSettingValue "Language", Trim$(sLang.Text)
+    SaveSettingValue "Temperature", Trim$(sTemp.Text)
+    SaveSettingValue "ChatMaxTokens", Trim$(sChatTok.Text)
+    SaveSettingValue "CellMaxTokens", Trim$(sCellTok.Text)
+    SaveSettingValue "Instructions", Trim$(sInstr.Text)
+    FillModels
+    CloseSettings
+    lblStatus.Caption = RU("\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 \u0441\u043E\u0445\u0440\u0430\u043D\u0435\u043D\u044B.")
+End Sub
+
+Private Sub btnCloseSettings_Click()
+    CloseSettings
+End Sub
+
+Private Sub CloseSettings()
+    fraSettings.Visible = False
+    txtHistory.Visible = True
+End Sub
+
+
+' =============================== HELPERS =====================================
+
+Private Sub DoSend(ByVal userText As String, ByVal forceData As Boolean, ByVal clearInput As Boolean)
+    Dim ctx As String, ans As String, shown As String, actions As Collection, agent As Boolean
+    userText = Trim$(userText)
+    If Len(userText) = 0 Then Exit Sub
+    agent = CBool(chkAgent.Value)
+
+    ctx = GetContext(forceData, agent)
+    If Len(mCtxLabel) > 0 Then
+        AppendHistory WhoYou(), userText & RU("   [+ \u0434\u0430\u043D\u043D\u044B\u0435: ") & mCtxLabel & "]"
+    Else
+        AppendHistory WhoYou(), userText
+    End If
+
+    SetBusy True, RU("\u0416\u0434\u0443 \u043E\u0442\u0432\u0435\u0442 \u043C\u043E\u0434\u0435\u043B\u0438...")
+    ans = ChatSend(userText, ctx, cboModel.Text, agent)
+    SetBusy False, RU("\u0413\u043E\u0442\u043E\u0432\u043E") & TokensText()
+
+    If Left$(ans, 6) = "#ERROR" Then
+        AppendHistory WhoAI(), ans
+        Exit Sub
+    End If
+    If clearInput Then txtInput.Text = ""
+
+    Set actions = SplitActions(ans, shown)
+    LastAnswer = shown
+    AppendHistory WhoAI(), shown
+
+    If actions Is Nothing Then Exit Sub
+    If actions.Count = 0 Then Exit Sub
+    If Not agent Then
+        AppendHistory "Excel", RU("\u041C\u043E\u0434\u0435\u043B\u044C \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0438\u043B\u0430 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F, \u043D\u043E \u0433\u0430\u043B\u043E\u0447\u043A\u0430 \u00AB\u0420\u0430\u0437\u0440\u0435\u0448\u0438\u0442\u044C \u043F\u0440\u0430\u0432\u043A\u0438\u00BB \u0432\u044B\u043A\u043B\u044E\u0447\u0435\u043D\u0430.")
+        Exit Sub
+    End If
+
+    ' no confirmation dialog: the list of changes (with [!] warnings) and the result go to the chat
+    AppendHistory "Excel", RU("\u041F\u0440\u0435\u0434\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0435 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F:") & ActionsPreview(actions)
+    AppendHistory "Excel", ApplyActions(actions)
+End Sub
+
+Private Function GetContext(ByVal forceData As Boolean, ByVal agent As Boolean) As String
+    Dim mode As Long, rng As Range, data As String
+    mCtxLabel = ""
+    mode = cboContext.ListIndex      ' 0 selection, 1 sheet, 2 workbook overview, 3 none
+    If forceData And mode = 3 Then mode = 0
+
+    On Error Resume Next
+    Select Case mode
+        Case 0
+            Set rng = ActiveWindow.RangeSelection
+            data = BuildContext(rng, True, True)
+            If Len(data) > 0 Then mCtxLabel = rng.Worksheet.Name & "!" & rng.Address(False, False)
+        Case 1
+            Set rng = ActiveSheet.UsedRange
+            data = BuildContext(rng, True, True)
+            If Len(data) > 0 Then mCtxLabel = RU("\u043B\u0438\u0441\u0442 ") & rng.Worksheet.Name
+        Case 2
+            data = BuildWorkbookOverview()
+            If Len(data) > 0 Then mCtxLabel = RU("\u043E\u0431\u0437\u043E\u0440 \u043A\u043D\u0438\u0433\u0438")
+    End Select
+    On Error GoTo 0
+
+    If Len(data) > 0 Or agent Then
+        GetContext = WorkbookInfoLine() & vbLf & data
+    End If
+End Function
+
+Private Sub AppendHistory(ByVal who As String, ByVal text As String)
+    Dim s As String
+    s = Replace(Replace(text, vbCrLf, vbLf), vbLf, vbCrLf)
+    If Len(txtHistory.Text) > 0 Then txtHistory.Text = txtHistory.Text & vbCrLf & vbCrLf
+    txtHistory.Text = txtHistory.Text & who & ": " & s
+    On Error Resume Next
+    txtHistory.SetFocus
+    txtHistory.SelStart = Len(txtHistory.Text)
+    txtInput.SetFocus
+End Sub
+
+Private Sub SetBusy(ByVal busy As Boolean, ByVal statusMsg As String)
+    btnSend.Enabled = Not busy
+    btnExplain.Enabled = Not busy
+    btnNew.Enabled = Not busy
+    btnFormula.Enabled = Not busy
+    btnInsert.Enabled = Not busy
+    btnUndo.Enabled = Not busy
+    lblStatus.Caption = statusMsg
+    If busy Then
+        Application.Cursor = xlWait
+    Else
+        Application.Cursor = xlDefault
+    End If
+    DoEvents
+End Sub
+
+Private Function TokensText() As String
+    If LastUsage > 0 Then TokensText = RU(" - \u0442\u043E\u043A\u0435\u043D\u043E\u0432: ") & LastUsage
+End Function
+
+Private Function AddLabel(ByVal parent As Object, ByVal cap As String, ByVal l As Single, _
+                          ByVal t As Single, ByVal w As Single) As MSForms.Label
+    Dim lb As MSForms.Label
+    Set lb = parent.Controls.Add("Forms.Label.1")
+    lb.Caption = cap: lb.Left = l: lb.Top = t: lb.Width = w: lb.Height = 14
+    Set AddLabel = lb
+End Function
+
+Private Function AddButton(ByVal parent As Object, ByVal cap As String, ByVal l As Single, _
+                           ByVal t As Single, ByVal w As Single) As MSForms.CommandButton
+    Dim b As MSForms.CommandButton
+    Set b = parent.Controls.Add("Forms.CommandButton.1")
+    b.Caption = cap: b.Left = l: b.Top = t: b.Width = w: b.Height = 24
+    Set AddButton = b
+End Function
