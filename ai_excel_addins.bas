@@ -26,14 +26,20 @@ Private Const DEF_LANGUAGE As String = "Russian"
 Private Const DEF_CHAT_MAX_TOKENS As String = "16000"
 Private Const DEF_CELL_MAX_TOKENS As String = "1000"
 ' Rows per sheet in the "workbook overview" context (0 = no row limit, only MAX_CONTEXT_CHARS)
-Private Const DEF_OVERVIEW_ROWS As String = "200"
+Private Const DEF_OVERVIEW_ROWS As String = "500"
+' "1" = the agent writes plain values instead of lookup formulas (see SystemPrompt)
+Private Const DEF_VALUES_NOT_FORMULAS As String = "0"
 ' -----------------------------------------------------------------------------
 Private Const APP_NAME As String = "ExcelLiteLLM"
 Private Const MAX_CONTEXT_CHARS As Long = 100000
 Private Const MAX_HISTORY_MESSAGES As Long = 20
+' Hard cap on the answer text. Must stay well above ChatMaxTokens: Cyrillic runs
+' 2-3 characters per token, and a cut answer means a cut ```actions block.
+Private Const MAX_ANSWER_CHARS As Long = 200000
 Private Const MAX_UNDO_CELLS As Long = 200000
 Private Const MAX_UNDO_FORMAT_CELLS As Long = 5000
-Private Const TIMEOUT_MS As Long = 180000
+' A reasoning model writing a few thousand tokens can easily need more than 3 minutes
+Private Const TIMEOUT_MS As Long = 600000
 
 Public LastAnswer As String
 Public LastUsage As Long
@@ -60,6 +66,7 @@ Public Function Setting(ByVal key As String) As String
         Case "ChatMaxTokens": def = DEF_CHAT_MAX_TOKENS
         Case "CellMaxTokens": def = DEF_CELL_MAX_TOKENS
         Case "OverviewRows": def = DEF_OVERVIEW_ROWS
+        Case "ValuesNotFormulas": def = DEF_VALUES_NOT_FORMULAS
     End Select
     Setting = GetSetting(APP_NAME, "Settings", key, def)
     If Len(Setting) = 0 And Len(def) > 0 Then Setting = def
@@ -915,8 +922,19 @@ Private Function SystemPrompt(ByVal agentMode As Boolean) As String
         s = s & "If the data you were given is cut off (a '...[N more rows]' marker), say so and ask for the rest "
         s = s & "instead of guessing. " & vbLf
         s = s & "Rules: always include the sheet name in every range (quote names with spaces: 'My sheet'!A1); "
-        s = s & "formulas use English function names and commas; prefer formulas over hardcoded results when "
-        s = s & "data may change; never change cells the user did not ask about. "
+        s = s & "formulas use English function names and commas; never change cells the user did not ask about. "
+        If Setting("ValuesNotFormulas") = "1" Then
+            s = s & "Write plain values with set_values. Do NOT use set_formula and do not put a formula string "
+            s = s & "into set_values unless the user explicitly asked for a formula. "
+        Else
+            s = s & "Use set_formula for things that must recalculate: sums, totals, percentages, dates, "
+            s = s & "anything derived from numbers the user may still edit. "
+            s = s & "But when the user asks you to FILL a column by matching, classifying or looking up rows "
+            s = s & "against a reference sheet, write the resulting values with set_values: that is a one-off "
+            s = s & "mapping, and a lookup formula would break as soon as the reference is re-sorted. "
+            s = s & "Avoid XLOOKUP, LET, LAMBDA and other functions missing from Excel 2016/2019 unless the user "
+            s = s & "says their Excel supports them; VLOOKUP or INDEX/MATCH work everywhere. "
+        End If
         s = s & "The actions block is applied to the workbook IMMEDIATELY, without any confirmation: never ask the user "
         s = s & "to confirm and never say that changes are waiting for confirmation. Without the block nothing changes. "
         s = s & "If the target cells are unclear, ask a question instead of adding the block."
@@ -982,7 +1000,7 @@ Public Function RequestLLM(ByVal messagesJson As String, ByVal model As String, 
     Else
         answer = Replace(answer, vbCrLf, vbLf)
         answer = Replace(answer, vbCr, vbLf)
-        RequestLLM = Left$(answer, 32000)
+        RequestLLM = Left$(answer, MAX_ANSWER_CHARS)
     End If
     Exit Function
 
