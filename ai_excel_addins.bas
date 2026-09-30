@@ -45,6 +45,11 @@ Public LastAnswer As String
 Public LastUsage As Long
 ' True when the model hit max_tokens: the answer (and any actions block) is incomplete
 Public LastTruncated As Boolean
+' Token counters of the last call, shown when an answer is cut off
+Public LastMaxTokens As Long
+Public LastPromptTokens As Long
+Public LastCompletionTokens As Long
+Public LastReasoningTokens As Long
 
 Private mRoles() As String
 Private mTexts() As String
@@ -222,6 +227,7 @@ Public Function ChatSend(ByVal userText As String, ByVal context As String, _
     Dim content As String, json As String, ans As String, i As Long
     content = userText
     If Len(context) > 0 Then content = content & vbLf & vbLf & "Excel data:" & vbLf & context
+    DropOldContexts
 
     json = "[" & Msg("system", SystemPrompt(agentMode))
     For i = 1 To mCount
@@ -411,7 +417,14 @@ Bad:
 End Function
 
 Private Function TruncatedNote() As String
-    TruncatedNote = RU("[!] \u043E\u0442\u0432\u0435\u0442 \u043C\u043E\u0434\u0435\u043B\u0438 \u043E\u0431\u043E\u0440\u0432\u0430\u043D \u043F\u043E \u043B\u0438\u043C\u0438\u0442\u0443 \u0442\u043E\u043A\u0435\u043D\u043E\u0432, \u043F\u0440\u0430\u0432\u043A\u0438 \u041D\u0415 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u044B. \u0423\u0432\u0435\u043B\u0438\u0447\u044C\u0442\u0435 \u00AB\u041C\u0430\u043A\u0441. \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0432 \u0447\u0430\u0442\u0435\u00BB \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0438\u043B\u0438 \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u0442\u0435 \u0437\u0430\u043F\u043E\u043B\u043D\u0438\u0442\u044C \u0434\u0438\u0430\u043F\u0430\u0437\u043E\u043D \u043F\u043E \u0447\u0430\u0441\u0442\u044F\u043C.")
+    Dim d As String
+    d = RU("[!] \u043E\u0442\u0432\u0435\u0442 \u043C\u043E\u0434\u0435\u043B\u0438 \u043E\u0431\u043E\u0440\u0432\u0430\u043D \u043F\u043E \u043B\u0438\u043C\u0438\u0442\u0443 \u0442\u043E\u043A\u0435\u043D\u043E\u0432, \u043F\u0440\u0430\u0432\u043A\u0438 \u041D\u0415 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u044B.")
+    d = d & vbLf & RU("      \u043B\u0438\u043C\u0438\u0442 max_tokens: ") & LastMaxTokens & _
+            RU(", \u043C\u043E\u0434\u0435\u043B\u044C \u043D\u0430\u043F\u0438\u0441\u0430\u043B\u0430: ") & LastCompletionTokens
+    If LastReasoningTokens > 0 Then d = d & RU(" (\u0438\u0437 \u043D\u0438\u0445 \u0440\u0430\u0441\u0441\u0443\u0436\u0434\u0435\u043D\u0438\u044F: ") & LastReasoningTokens & ")"
+    d = d & RU(", \u0432 \u0437\u0430\u043F\u0440\u043E\u0441 \u0443\u0448\u043B\u043E: ") & LastPromptTokens
+    d = d & vbLf & RU("      \u0415\u0441\u043B\u0438 \u0432 \u0437\u0430\u043F\u0440\u043E\u0441 \u0443\u0448\u043B\u043E \u043E\u0447\u0435\u043D\u044C \u043C\u043D\u043E\u0433\u043E - \u043D\u0430\u0436\u043C\u0438\u0442\u0435 \u00AB\u041D\u043E\u0432\u044B\u0439 \u0447\u0430\u0442\u00BB \u0438\u043B\u0438 \u0443\u043C\u0435\u043D\u044C\u0448\u0438\u0442\u0435 \u00AB\u0421\u0442\u0440\u043E\u043A \u043D\u0430 \u043B\u0438\u0441\u0442 (\u043E\u0431\u0437\u043E\u0440)\u00BB. \u0418\u043D\u0430\u0447\u0435 \u043F\u043E\u0434\u043D\u0438\u043C\u0438\u0442\u0435 \u00AB\u041C\u0430\u043A\u0441. \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0432 \u0447\u0430\u0442\u0435\u00BB.")
+    TruncatedNote = d
 End Function
 
 Public Function ActionsPreview(ByVal actions As Collection) As String
@@ -951,6 +964,9 @@ Public Function RequestLLM(ByVal messagesJson As String, ByVal model As String, 
     On Error GoTo Fail
     LastUsage = 0
     LastTruncated = False
+    LastPromptTokens = 0
+    LastCompletionTokens = 0
+    LastReasoningTokens = 0
 
     Dim apiKey As String
     apiKey = Trim$(Setting("ApiKey"))
@@ -960,6 +976,7 @@ Public Function RequestLLM(ByVal messagesJson As String, ByVal model As String, 
     End If
     If Len(Trim$(model)) = 0 Then model = Setting("Model")
     If maxTokens <= 0 Then maxTokens = 1000
+    LastMaxTokens = maxTokens
 
     Dim body As String
     body = "{""model"":""" & JsonEscape(Trim$(model)) & """,""max_tokens"":" & maxTokens
@@ -988,6 +1005,9 @@ Public Function RequestLLM(ByVal messagesJson As String, ByVal model As String, 
     End If
 
     LastUsage = JsonNumber(resp, """total_tokens""")
+    LastPromptTokens = JsonNumber(resp, """prompt_tokens""")
+    LastCompletionTokens = JsonNumber(resp, """completion_tokens""")
+    LastReasoningTokens = JsonNumber(resp, """reasoning_tokens""")
 
     Dim pos As Long, answer As String, fin As String
     pos = InStr(1, resp, """choices""")
@@ -1022,6 +1042,19 @@ End Function
 Private Function Msg(ByVal role As String, ByVal content As String) As String
     Msg = "{""role"":""" & role & """,""content"":""" & JsonEscape(content) & """}"
 End Function
+
+' Fresh Excel data is attached to every message, so the copies stored in earlier turns
+' are dead weight: they multiply the prompt until the model has no room left to answer.
+' Only the newest message keeps its data block.
+Private Sub DropOldContexts()
+    Dim i As Long, p As Long
+    For i = 1 To mCount
+        If mRoles(i) = "user" Then
+            p = InStr(mTexts(i), vbLf & vbLf & "Excel data:" & vbLf)
+            If p > 0 Then mTexts(i) = Left$(mTexts(i), p - 1) & vbLf & "[Excel data omitted, see the latest message]"
+        End If
+    Next i
+End Sub
 
 Private Sub AddHistory(ByVal role As String, ByVal text As String)
     Dim i As Long
