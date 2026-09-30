@@ -528,7 +528,17 @@ Private Sub ApplyOne(ByVal a As Object, ByVal batch As Collection)
             Set u.Item("obj") = ws
             batch.Add u
             If Len(DictStr(a, "name")) > 0 Then ws.Name = Left$(DictStr(a, "name"), 31)
+            PlaceSheet ws, a
             prev.Activate
+
+        Case "move_sheet"
+            Set ws = SheetByName(DictStr(a, "sheet"))
+            Set u = CreateObject("Scripting.Dictionary")
+            u.Item("type") = "move"
+            Set u.Item("obj") = ws
+            u.Item("index") = WsIndex(ws)
+            batch.Add u
+            PlaceSheet ws, a
 
         Case "chart"
             Set src = ResolveRange(DictStr(a, "source"))
@@ -552,6 +562,58 @@ Private Sub ApplyOne(ByVal a As Object, ByVal batch As Collection)
         Case Else
             Err.Raise vbObjectError + 1, , RU("\u043D\u0435\u0438\u0437\u0432\u0435\u0441\u0442\u043D\u043E\u0435 \u0434\u0435\u0439\u0441\u0442\u0432\u0438\u0435 '") & act & "'"
     End Select
+End Sub
+
+Private Function SheetByName(ByVal nm As String) As Worksheet
+    On Error GoTo Bad
+    Set SheetByName = ActiveWorkbook.Worksheets(nm)
+    Exit Function
+Bad:
+    Err.Raise vbObjectError + 5, , RU("\u043D\u0435\u0442 \u043B\u0438\u0441\u0442\u0430 '") & nm & "'"
+End Function
+
+' Position among worksheets only: ws.Index also counts chart sheets
+Private Function WsIndex(ByVal ws As Worksheet) As Long
+    Dim i As Long
+    For i = 1 To ws.Parent.Worksheets.Count
+        If ws.Parent.Worksheets(i) Is ws Then
+            WsIndex = i
+            Exit Function
+        End If
+    Next i
+End Function
+
+Private Sub MoveSheetTo(ByVal ws As Worksheet, ByVal pos As Long)
+    Dim cnt As Long, cur As Long
+    cnt = ws.Parent.Worksheets.Count
+    cur = WsIndex(ws)
+    If pos < 1 Then pos = 1
+    If pos > cnt Then pos = cnt
+    If pos = cur Then Exit Sub
+    If pos = cnt Then
+        ws.Move After:=ws.Parent.Worksheets(cnt)
+    ElseIf cur < pos Then
+        ' ws leaves its slot first, so the target shifts one to the left
+        ws.Move After:=ws.Parent.Worksheets(pos)
+    Else
+        ws.Move Before:=ws.Parent.Worksheets(pos)
+    End If
+End Sub
+
+' "after"/"before" a named sheet, or "position": 1-based index among worksheets
+Private Sub PlaceSheet(ByVal ws As Worksheet, ByVal a As Object)
+    Dim nm As String
+    nm = DictStr(a, "after")
+    If Len(nm) > 0 Then
+        ws.Move After:=SheetByName(nm)
+        Exit Sub
+    End If
+    nm = DictStr(a, "before")
+    If Len(nm) > 0 Then
+        ws.Move Before:=SheetByName(nm)
+        Exit Sub
+    End If
+    If a.Exists("position") Then MoveSheetTo ws, CLng(Val(CStr(DictItem(a, "position"))))
 End Sub
 
 ' Declared a real block of cells but supplied fewer/more values: almost always a cut-off
@@ -628,7 +690,8 @@ Private Function DescribeAction(ByVal a As Object, ByVal detailed As Boolean) As
         Case "clear":       d = RU("\u043E\u0447\u0438\u0441\u0442\u0438\u0442\u044C ") & DictStr(a, "range")
         Case "sort":        d = RU("\u0441\u043E\u0440\u0442\u0438\u0440\u043E\u0432\u0430\u0442\u044C ") & DictStr(a, "range") & RU(" \u043F\u043E \u0441\u0442\u043E\u043B\u0431\u0446\u0443 ") & _
                                 DictStr(a, "key") & " " & DictStr(a, "order")
-        Case "add_sheet":   d = RU("\u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043B\u0438\u0441\u0442 '") & DictStr(a, "name") & "'"
+        Case "add_sheet":   d = RU("\u0434\u043E\u0431\u0430\u0432\u0438\u0442\u044C \u043B\u0438\u0441\u0442 '") & DictStr(a, "name") & "'" & PlaceText(a)
+        Case "move_sheet":  d = RU("\u043F\u0435\u0440\u0435\u043C\u0435\u0441\u0442\u0438\u0442\u044C \u043B\u0438\u0441\u0442 '") & DictStr(a, "sheet") & "'" & PlaceText(a)
         Case "chart":       d = RU("\u0434\u0438\u0430\u0433\u0440\u0430\u043C\u043C\u0430 (") & DictStr(a, "type") & RU(") \u043F\u043E \u0434\u0430\u043D\u043D\u044B\u043C ") & DictStr(a, "source")
         Case Else:          d = act
     End Select
@@ -659,6 +722,16 @@ Private Function CellCountOf(ByVal addr As String, ByVal usedOnly As Boolean) As
     If usedOnly Then Set rng = Intersect(rng, rng.Worksheet.UsedRange)
     If rng Is Nothing Then CellCountOf = 0 Else CellCountOf = rng.Cells.CountLarge
 Done:
+End Function
+
+Private Function PlaceText(ByVal a As Object) As String
+    If Len(DictStr(a, "after")) > 0 Then
+        PlaceText = RU(" \u043F\u043E\u0441\u043B\u0435 \u043B\u0438\u0441\u0442\u0430 '") & DictStr(a, "after") & "'"
+    ElseIf Len(DictStr(a, "before")) > 0 Then
+        PlaceText = RU(" \u043F\u0435\u0440\u0435\u0434 \u043B\u0438\u0441\u0442\u043E\u043C '") & DictStr(a, "before") & "'"
+    ElseIf a.Exists("position") Then
+        PlaceText = RU(" \u043D\u0430 \u043F\u043E\u0437\u0438\u0446\u0438\u044E ") & CStr(DictItem(a, "position"))
+    End If
 End Function
 
 ' The address set_values really writes to: the declared range shrinks/grows to the array
@@ -754,6 +827,8 @@ Public Function UndoLast() As String
                 Application.DisplayAlerts = False
                 u.Item("obj").Delete
                 Application.DisplayAlerts = True
+            Case "move"
+                MoveSheetTo u.Item("obj"), CLng(u.Item("index"))
             Case "chart"
                 u.Item("obj").Delete
         End Select
@@ -924,7 +999,11 @@ Private Function SystemPrompt(ByVal agentMode As Boolean) As String
         s = s & """align"":""center"",""wrap"":true,""borders"":true,""autofit"":true}"
         s = s & "  - any subset of these properties; fill ""none"" removes the fill" & vbLf
         s = s & "{""action"":""clear"",""range"":""Sheet1!E2:E50""}" & vbLf
-        s = s & "{""action"":""add_sheet"",""name"":""Summary""}" & vbLf
+        s = s & "{""action"":""add_sheet"",""name"":""Summary"",""after"":""Data""}"
+        s = s & "  - place it with ""after"" or ""before"" (a sheet name) or ""position"":3 "
+        s = s & "(1-based, counting worksheets only); without them the new sheet goes last" & vbLf
+        s = s & "{""action"":""move_sheet"",""sheet"":""Summary"",""position"":3}"
+        s = s & "  - moves an existing sheet; accepts the same ""after""/""before""/""position""" & vbLf
         s = s & "{""action"":""sort"",""range"":""Sheet1!A1:F200"",""key"":""C"",""order"":""desc"",""header"":true}" & vbLf
         s = s & "{""action"":""chart"",""source"":""Sheet1!A1:B13"",""type"":""column"",""title"":""Sales"","
         s = s & """target"":""Sheet1!H2""}  - types: column, bar, line, pie, scatter, area" & vbLf
