@@ -49,8 +49,12 @@ Private Const HISTORY_BOX_MAX As Long = 30000
 ' --- resizable window ---------------------------------------------------------
 ' MSForms draws a fixed border. Adding WS_THICKFRAME to the window style gives the
 ' user a normal drag handle; UserForm_Resize then lays the controls out again.
-Private Const MIN_W As Single = 340
-Private Const MIN_H As Single = 430
+' How small the window may get. Below CONTENT_MIN the layout stops shrinking and
+' the form scrolls instead, so the controls never end up on top of each other.
+Private Const MIN_W As Single = 170
+Private Const MIN_H As Single = 215
+Private Const CONTENT_MIN_W As Single = 300
+Private Const CONTENT_MIN_H As Single = 300
 Private Const GWL_STYLE As Long = -16
 Private Const WS_THICKFRAME As Long = &H40000
 Private Const WS_MAXIMIZEBOX As Long = &H10000
@@ -475,8 +479,9 @@ Private Function Mx(ByVal a As Single, ByVal b As Single) As Single
 End Function
 
 Private Sub LayoutControls()
-    Dim w As Single, h As Single, colW As Single, col2 As Single
-    Dim bw As Single, rowBtn As Single, inTop As Single, chkL As Single
+    Dim vw As Single, vh As Single, w As Single, h As Single
+    Dim colW As Single, col2 As Single, capW As Single
+    Dim bw As Single, rowBtn As Single, inTop As Single, inH As Single, chkL As Single
 
     If txtHistory Is Nothing Then Exit Sub      ' fires once before the controls exist
     If mLayingOut Then Exit Sub
@@ -485,33 +490,51 @@ Private Sub LayoutControls()
 
     If Me.Width < MIN_W Then Me.Width = MIN_W
     If Me.Height < MIN_H Then Me.Height = MIN_H
-    Me.ScrollBars = fmScrollBarsNone
 
-    w = Me.InsideWidth - 12                     ' usable width, 6 pt margins
-    h = Me.InsideHeight
+    ' the layout is always built for at least CONTENT_MIN; a smaller window scrolls
+    vw = Mx(Me.InsideWidth, CONTENT_MIN_W)
+    vh = Mx(Me.InsideHeight, CONTENT_MIN_H)
+    Me.KeepScrollBarsVisible = fmScrollBarsNone
+    Me.ScrollWidth = CONTENT_MIN_W
+    Me.ScrollHeight = CONTENT_MIN_H
+    Me.ScrollBars = fmScrollBarsBoth
+
+    w = vw - 12                                 ' usable width, 6 pt margins
+    h = vh
+
+    ' narrow window: drop the captions and give the space to the drop-downs
+    capW = 42
+    If w < 318 Then capW = 0
+    lblModel.Visible = (capW > 0)
+    lblData.Visible = (capW > 0)
+    lblPreset.Visible = (capW > 0)
 
     ' row 1: model + data, two equal columns
     colW = (w - 6) / 2
     col2 = 6 + colW + 6
     lblModel.Left = 6: lblModel.Top = 9
-    cboModel.Left = 48: cboModel.Top = 6: cboModel.Width = Mx(40, colW - 42)
+    cboModel.Left = 6 + capW: cboModel.Top = 6: cboModel.Width = Mx(40, colW - capW)
     lblData.Left = col2: lblData.Top = 9
-    cboContext.Left = col2 + 42: cboContext.Top = 6: cboContext.Width = Mx(40, colW - 42)
+    cboContext.Left = col2 + capW: cboContext.Top = 6: cboContext.Width = Mx(40, colW - capW)
 
     ' row 2: preset grows, the checkbox stays pinned to the right
     chkL = 6 + w - 106
     lblPreset.Left = 6: lblPreset.Top = 33
-    cboPreset.Left = 48: cboPreset.Top = 30: cboPreset.Width = Mx(40, chkL - 6 - 48)
+    cboPreset.Left = 6 + capW: cboPreset.Top = 30: cboPreset.Width = Mx(40, chkL - 6 - 6 - capW)
     chkAgent.Left = chkL: chkAgent.Top = 30
+
+    ' the input box gives up height first, the history keeps what is left
+    inH = 70
+    If vh < 400 Then inH = Mx(28, 70 - (400 - vh))
 
     ' bottom block: 3 button rows (step 28) + status line, anchored to the bottom
     rowBtn = h - 106
-    inTop = rowBtn - 76                          ' input box is 70 pt high + 6 gap
+    inTop = rowBtn - inH - 6
     bw = (w - 12) / 3
 
     txtHistory.Left = 6: txtHistory.Top = 54
-    txtHistory.Width = w: txtHistory.Height = Mx(40, inTop - 60)
-    txtInput.Left = 6: txtInput.Top = inTop: txtInput.Width = w: txtInput.Height = 70
+    txtHistory.Width = w: txtHistory.Height = Mx(24, inTop - 60)
+    txtInput.Left = 6: txtInput.Top = inTop: txtInput.Width = w: txtInput.Height = inH
 
     PlaceRow btnSend, btnExplain, btnNew, rowBtn, bw
     PlaceRow btnFormula, btnInsert, btnUndo, rowBtn + 28, bw
