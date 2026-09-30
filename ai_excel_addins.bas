@@ -25,6 +25,8 @@ Private Const DEF_MODEL_LIST As String = "gti-local/Qwen3.8,geotech/zai/glm-5.3"
 Private Const DEF_LANGUAGE As String = "Russian"
 Private Const DEF_CHAT_MAX_TOKENS As String = "4000"
 Private Const DEF_CELL_MAX_TOKENS As String = "1000"
+' Rows per sheet in the "workbook overview" context (0 = no row limit, only MAX_CONTEXT_CHARS)
+Private Const DEF_OVERVIEW_ROWS As String = "200"
 ' -----------------------------------------------------------------------------
 Private Const APP_NAME As String = "ExcelLiteLLM"
 Private Const MAX_CONTEXT_CHARS As Long = 100000
@@ -55,6 +57,7 @@ Public Function Setting(ByVal key As String) As String
         Case "Language": def = DEF_LANGUAGE
         Case "ChatMaxTokens": def = DEF_CHAT_MAX_TOKENS
         Case "CellMaxTokens": def = DEF_CELL_MAX_TOKENS
+        Case "OverviewRows": def = DEF_OVERVIEW_ROWS
     End Select
     Setting = GetSetting(APP_NAME, "Settings", key, def)
     If Len(Setting) = 0 And Len(def) > 0 Then Setting = def
@@ -318,10 +321,15 @@ Public Function WorkbookInfoLine() As String
 End Function
 
 Public Function BuildWorkbookOverview() As String
-    Dim ws As Worksheet, buf As String, used As Long
+    Dim ws As Worksheet, buf As String, used As Long, maxRows As Long
+    maxRows = SettingLong("OverviewRows")
+    If maxRows < 0 Then maxRows = 0
     For Each ws In ActiveWorkbook.Worksheets
-        SbAdd buf, used, BuildContext(DataRange(ws), True, True, 15) & vbLf
-        If used > MAX_CONTEXT_CHARS Then Exit For
+        SbAdd buf, used, BuildContext(DataRange(ws), True, True, maxRows) & vbLf
+        If used > MAX_CONTEXT_CHARS Then
+            SbAdd buf, used, "...[context limit reached, remaining sheets not shown]" & vbLf
+            Exit For
+        End If
     Next ws
     BuildWorkbookOverview = Left$(buf, used)
 End Function
