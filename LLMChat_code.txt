@@ -56,8 +56,17 @@ Private Const MIN_H As Single = 215
 Private Const CONTENT_MIN_W As Single = 300
 Private Const CONTENT_MIN_H As Single = 300
 Private Const GWL_STYLE As Long = -16
+Private Const GWL_EXSTYLE As Long = -20
 Private Const WS_THICKFRAME As Long = &H40000
 Private Const WS_MAXIMIZEBOX As Long = &H10000
+Private Const WS_MINIMIZEBOX As Long = &H20000
+' a tool window has no taskbar button, and an owned window without one cannot be
+' minimised properly - it just collapses into a stub in the corner of the screen
+Private Const WS_EX_APPWINDOW As Long = &H40000
+Private Const WS_EX_TOOLWINDOW As Long = &H80
+Private Const SW_HIDE As Long = 0
+Private Const SW_SHOW As Long = 5
+Private Const SW_RESTORE As Long = 9
 
 #If VBA7 Then
     #If Win64 Then
@@ -74,6 +83,9 @@ Private Const WS_MAXIMIZEBOX As Long = &H10000
     Private Declare PtrSafe Function FindWindowA Lib "user32" ( _
         ByVal lpClassName As String, ByVal lpWindowName As String) As LongPtr
     Private Declare PtrSafe Function DrawMenuBar Lib "user32" (ByVal hWnd As LongPtr) As Long
+    Private Declare PtrSafe Function ShowWindow Lib "user32" ( _
+        ByVal hWnd As LongPtr, ByVal nCmdShow As Long) As Long
+    Private Declare PtrSafe Function IsIconic Lib "user32" (ByVal hWnd As LongPtr) As Long
 #Else
     Private Declare Function GetWinLong Lib "user32" Alias "GetWindowLongA" ( _
         ByVal hWnd As Long, ByVal nIndex As Long) As Long
@@ -82,9 +94,17 @@ Private Const WS_MAXIMIZEBOX As Long = &H10000
     Private Declare Function FindWindowA Lib "user32" ( _
         ByVal lpClassName As String, ByVal lpWindowName As String) As Long
     Private Declare Function DrawMenuBar Lib "user32" (ByVal hWnd As Long) As Long
+    Private Declare Function ShowWindow Lib "user32" ( _
+        ByVal hWnd As Long, ByVal nCmdShow As Long) As Long
+    Private Declare Function IsIconic Lib "user32" (ByVal hWnd As Long) As Long
 #End If
 
 Private mLayingOut As Boolean
+#If VBA7 Then
+    Private mCfgHwnd As LongPtr
+#Else
+    Private mCfgHwnd As Long
+#End If
 
 Private mCtxLabel As String
 Private mPresetText(1 To 8) As String
@@ -444,20 +464,53 @@ End Sub
 ' if the API call fails the form simply stays fixed-size.
 Private Sub MakeResizable()
     #If VBA7 Then
-        Dim hWnd As LongPtr, st As LongPtr
+        Dim hWnd As LongPtr, st As LongPtr, ex As LongPtr
     #Else
-        Dim hWnd As Long, st As Long
+        Dim hWnd As Long, st As Long, ex As Long
     #End If
     On Error GoTo Done
-    hWnd = FindWindowA("ThunderDFrame", Me.Caption)
-    If hWnd = 0 Then hWnd = FindWindowA("ThunderXFrame", Me.Caption)
+    hWnd = FormHwnd()
     If hWnd = 0 Then GoTo Done
+    If hWnd = mCfgHwnd Then GoTo Done          ' already done for this window
+    mCfgHwnd = hWnd                            ' set first: SW_SHOW below re-enters Activate
+
     st = GetWinLong(hWnd, GWL_STYLE)
-    SetWinLong hWnd, GWL_STYLE, st Or WS_THICKFRAME Or WS_MAXIMIZEBOX
+    SetWinLong hWnd, GWL_STYLE, st Or WS_THICKFRAME Or WS_MAXIMIZEBOX Or WS_MINIMIZEBOX
+
+    ' the taskbar button has to be granted while the window is hidden
+    ex = GetWinLong(hWnd, GWL_EXSTYLE)
+    ShowWindow hWnd, SW_HIDE
+    SetWinLong hWnd, GWL_EXSTYLE, (ex Or WS_EX_APPWINDOW) And Not WS_EX_TOOLWINDOW
+    ShowWindow hWnd, SW_SHOW
+
     DrawMenuBar hWnd
 Done:
     On Error GoTo 0
     LayoutControls
+End Sub
+
+#If VBA7 Then
+Private Function FormHwnd() As LongPtr
+#Else
+Private Function FormHwnd() As Long
+#End If
+    On Error Resume Next
+    FormHwnd = FindWindowA("ThunderDFrame", Me.Caption)
+    If FormHwnd = 0 Then FormHwnd = FindWindowA("ThunderXFrame", Me.Caption)
+End Function
+
+' Called from LLM_Chat: the shortcut must bring a minimised window back
+Public Sub RestoreWindow()
+    #If VBA7 Then
+        Dim hWnd As LongPtr
+    #Else
+        Dim hWnd As Long
+    #End If
+    On Error Resume Next
+    hWnd = FormHwnd()
+    If hWnd <> 0 Then
+        If IsIconic(hWnd) <> 0 Then ShowWindow hWnd, SW_RESTORE
+    End If
 End Sub
 
 Private Sub RestoreSize()

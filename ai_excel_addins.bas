@@ -150,6 +150,8 @@ Public Sub LLM_Chat()
     On Error GoTo NoForm
     If mChat Is Nothing Then Set mChat = VBA.UserForms.Add("frmLLMChat")
     mChat.Show vbModeless
+    On Error Resume Next
+    mChat.RestoreWindow          ' bring it back if the user minimised it
     Exit Sub
 NoForm:
     Set mChat = Nothing
