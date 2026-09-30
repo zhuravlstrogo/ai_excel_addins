@@ -23,6 +23,9 @@ Private cboModel As MSForms.ComboBox
 Private cboContext As MSForms.ComboBox
 Private chkAgent As MSForms.CheckBox
 Private lblStatus As MSForms.Label
+Private lblModel As MSForms.Label
+Private lblData As MSForms.Label
+Private lblPreset As MSForms.Label
 
 ' --- settings panel ---
 Private fraSettings As MSForms.Frame
@@ -42,6 +45,42 @@ Private sInstr As MSForms.TextBox
 
 ' The chat box itself is limited by MSForms, not by the model
 Private Const HISTORY_BOX_MAX As Long = 30000
+
+' --- resizable window ---------------------------------------------------------
+' MSForms draws a fixed border. Adding WS_THICKFRAME to the window style gives the
+' user a normal drag handle; UserForm_Resize then lays the controls out again.
+Private Const MIN_W As Single = 340
+Private Const MIN_H As Single = 430
+Private Const GWL_STYLE As Long = -16
+Private Const WS_THICKFRAME As Long = &H40000
+Private Const WS_MAXIMIZEBOX As Long = &H10000
+
+#If VBA7 Then
+    #If Win64 Then
+        Private Declare PtrSafe Function GetWinLong Lib "user32" Alias "GetWindowLongPtrA" ( _
+            ByVal hWnd As LongPtr, ByVal nIndex As Long) As LongPtr
+        Private Declare PtrSafe Function SetWinLong Lib "user32" Alias "SetWindowLongPtrA" ( _
+            ByVal hWnd As LongPtr, ByVal nIndex As Long, ByVal dwNewLong As LongPtr) As LongPtr
+    #Else
+        Private Declare PtrSafe Function GetWinLong Lib "user32" Alias "GetWindowLongA" ( _
+            ByVal hWnd As LongPtr, ByVal nIndex As Long) As LongPtr
+        Private Declare PtrSafe Function SetWinLong Lib "user32" Alias "SetWindowLongA" ( _
+            ByVal hWnd As LongPtr, ByVal nIndex As Long, ByVal dwNewLong As LongPtr) As LongPtr
+    #End If
+    Private Declare PtrSafe Function FindWindowA Lib "user32" ( _
+        ByVal lpClassName As String, ByVal lpWindowName As String) As LongPtr
+    Private Declare PtrSafe Function DrawMenuBar Lib "user32" (ByVal hWnd As LongPtr) As Long
+#Else
+    Private Declare Function GetWinLong Lib "user32" Alias "GetWindowLongA" ( _
+        ByVal hWnd As Long, ByVal nIndex As Long) As Long
+    Private Declare Function SetWinLong Lib "user32" Alias "SetWindowLongA" ( _
+        ByVal hWnd As Long, ByVal nIndex As Long, ByVal dwNewLong As Long) As Long
+    Private Declare Function FindWindowA Lib "user32" ( _
+        ByVal lpClassName As String, ByVal lpWindowName As String) As Long
+    Private Declare Function DrawMenuBar Lib "user32" (ByVal hWnd As Long) As Long
+#End If
+
+Private mLayingOut As Boolean
 
 Private mCtxLabel As String
 Private mPresetText(1 To 8) As String
@@ -70,7 +109,7 @@ Private Sub UserForm_Initialize()
     Me.Height = 490
 
     ' row 1: model + data
-    AddLabel Me, RU("\u041C\u043E\u0434\u0435\u043B\u044C:"), 6, 9, 42
+    Set lblModel = AddLabel(Me, RU("\u041C\u043E\u0434\u0435\u043B\u044C:"), 6, 9, 42)
     Set cboModel = Me.Controls.Add("Forms.ComboBox.1")
     With cboModel
         .Left = 48: .Top = 6: .Width = 144
@@ -78,7 +117,7 @@ Private Sub UserForm_Initialize()
     End With
     FillModels
 
-    AddLabel Me, RU("\u0414\u0430\u043D\u043D\u044B\u0435:"), 198, 9, 42
+    Set lblData = AddLabel(Me, RU("\u0414\u0430\u043D\u043D\u044B\u0435:"), 198, 9, 42)
     Set cboContext = Me.Controls.Add("Forms.ComboBox.1")
     With cboContext
         .Left = 240: .Top = 6: .Width = 136
@@ -91,7 +130,7 @@ Private Sub UserForm_Initialize()
     End With
 
     ' row 2: quick actions + agent mode
-    AddLabel Me, RU("\u0428\u0430\u0431\u043B\u043E\u043D:"), 6, 33, 42
+    Set lblPreset = AddLabel(Me, RU("\u0428\u0430\u0431\u043B\u043E\u043D:"), 6, 33, 42)
     Set cboPreset = Me.Controls.Add("Forms.ComboBox.1")
     With cboPreset
         .Left = 48: .Top = 30: .Width = 216
@@ -138,6 +177,7 @@ Private Sub UserForm_Initialize()
     Set lblStatus = AddLabel(Me, RU("\u0412\u044B\u0434\u0435\u043B\u0438\u0442\u0435 \u044F\u0447\u0435\u0439\u043A\u0438, \u043D\u0430\u043F\u0438\u0448\u0438\u0442\u0435 \u0432\u043E\u043F\u0440\u043E\u0441 \u0438 \u043D\u0430\u0436\u043C\u0438\u0442\u0435 Ctrl+Enter."), 6, 435, 370)
 
     BuildSettingsPanel
+    RestoreSize
 End Sub
 
 Private Sub BuildSettingsPanel()
@@ -146,6 +186,8 @@ Private Sub BuildSettingsPanel()
     With fraSettings
         .Left = 6: .Top = 54: .Width = 370: .Height = 402
         .Caption = RU("\u041D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0438 (\u0441\u043E\u0445\u0440\u0430\u043D\u044F\u044E\u0442\u0441\u044F \u0434\u043B\u044F \u0432\u0430\u0448\u0435\u0433\u043E \u043F\u043E\u043B\u044C\u0437\u043E\u0432\u0430\u0442\u0435\u043B\u044F Windows)")
+        .ScrollBars = fmScrollBarsVertical
+        .ScrollHeight = 384
         .Visible = False
     End With
 
@@ -236,10 +278,19 @@ End Sub
 ' =============================== EVENTS ======================================
 
 Private Sub UserForm_QueryClose(Cancel As Integer, CloseMode As Integer)
+    SaveSize
     If CloseMode = vbFormControlMenu Then     ' hide, keep the conversation
         Cancel = True
         Me.Hide
     End If
+End Sub
+
+Private Sub UserForm_Activate()
+    MakeResizable
+End Sub
+
+Private Sub UserForm_Resize()
+    LayoutControls
 End Sub
 
 Private Sub txtInput_KeyDown(ByVal KeyCode As MSForms.ReturnInteger, ByVal Shift As Integer)
@@ -380,6 +431,120 @@ End Sub
 Private Sub CloseSettings()
     fraSettings.Visible = False
     txtHistory.Visible = True
+End Sub
+
+
+' ============================ RESIZABLE WINDOW ===============================
+
+' Adds the drag border to the window MSForms created. Safe to call more than once;
+' if the API call fails the form simply stays fixed-size.
+Private Sub MakeResizable()
+    #If VBA7 Then
+        Dim hWnd As LongPtr, st As LongPtr
+    #Else
+        Dim hWnd As Long, st As Long
+    #End If
+    On Error GoTo Done
+    hWnd = FindWindowA("ThunderDFrame", Me.Caption)
+    If hWnd = 0 Then hWnd = FindWindowA("ThunderXFrame", Me.Caption)
+    If hWnd = 0 Then GoTo Done
+    st = GetWinLong(hWnd, GWL_STYLE)
+    SetWinLong hWnd, GWL_STYLE, st Or WS_THICKFRAME Or WS_MAXIMIZEBOX
+    DrawMenuBar hWnd
+Done:
+    On Error GoTo 0
+    LayoutControls
+End Sub
+
+Private Sub RestoreSize()
+    Dim w As Single, h As Single
+    w = Val(Setting("FormWidth"))
+    h = Val(Setting("FormHeight"))
+    If w >= MIN_W Then Me.Width = w
+    If h >= MIN_H Then Me.Height = h
+End Sub
+
+Private Sub SaveSize()
+    On Error Resume Next
+    SaveSettingValue "FormWidth", CStr(CLng(Me.Width))
+    SaveSettingValue "FormHeight", CStr(CLng(Me.Height))
+End Sub
+
+Private Function Mx(ByVal a As Single, ByVal b As Single) As Single
+    If a > b Then Mx = a Else Mx = b
+End Function
+
+Private Sub LayoutControls()
+    Dim w As Single, h As Single, colW As Single, col2 As Single
+    Dim bw As Single, rowBtn As Single, inTop As Single, chkL As Single
+
+    If txtHistory Is Nothing Then Exit Sub      ' fires once before the controls exist
+    If mLayingOut Then Exit Sub
+    mLayingOut = True
+    On Error GoTo Done
+
+    If Me.Width < MIN_W Then Me.Width = MIN_W
+    If Me.Height < MIN_H Then Me.Height = MIN_H
+    Me.ScrollBars = fmScrollBarsNone
+
+    w = Me.InsideWidth - 12                     ' usable width, 6 pt margins
+    h = Me.InsideHeight
+
+    ' row 1: model + data, two equal columns
+    colW = (w - 6) / 2
+    col2 = 6 + colW + 6
+    lblModel.Left = 6: lblModel.Top = 9
+    cboModel.Left = 48: cboModel.Top = 6: cboModel.Width = Mx(40, colW - 42)
+    lblData.Left = col2: lblData.Top = 9
+    cboContext.Left = col2 + 42: cboContext.Top = 6: cboContext.Width = Mx(40, colW - 42)
+
+    ' row 2: preset grows, the checkbox stays pinned to the right
+    chkL = 6 + w - 106
+    lblPreset.Left = 6: lblPreset.Top = 33
+    cboPreset.Left = 48: cboPreset.Top = 30: cboPreset.Width = Mx(40, chkL - 6 - 48)
+    chkAgent.Left = chkL: chkAgent.Top = 30
+
+    ' bottom block: 3 button rows (step 28) + status line, anchored to the bottom
+    rowBtn = h - 106
+    inTop = rowBtn - 76                          ' input box is 70 pt high + 6 gap
+    bw = (w - 12) / 3
+
+    txtHistory.Left = 6: txtHistory.Top = 54
+    txtHistory.Width = w: txtHistory.Height = Mx(40, inTop - 60)
+    txtInput.Left = 6: txtInput.Top = inTop: txtInput.Width = w: txtInput.Height = 70
+
+    PlaceRow btnSend, btnExplain, btnNew, rowBtn, bw
+    PlaceRow btnFormula, btnInsert, btnUndo, rowBtn + 28, bw
+    PlaceRow btnSaveChat, btnSettings, btnCache, rowBtn + 56, bw
+    lblStatus.Left = 6: lblStatus.Top = rowBtn + 86: lblStatus.Width = w
+
+    LayoutSettings w, h
+Done:
+    mLayingOut = False
+End Sub
+
+Private Sub PlaceRow(ByVal b1 As MSForms.CommandButton, ByVal b2 As MSForms.CommandButton, _
+                     ByVal b3 As MSForms.CommandButton, ByVal t As Single, ByVal bw As Single)
+    b1.Top = t: b1.Left = 6: b1.Width = bw
+    b2.Top = t: b2.Left = 6 + bw + 6: b2.Width = bw
+    b3.Top = t: b3.Left = 6 + 2 * (bw + 6): b3.Width = bw
+End Sub
+
+' The settings panel covers the same area as the history box. Its rows keep their
+' vertical positions and the frame scrolls, so the Save button is always reachable.
+Private Sub LayoutSettings(ByVal w As Single, ByVal h As Single)
+    Dim inner As Single, boxW As Single
+    If fraSettings Is Nothing Then Exit Sub
+    fraSettings.Left = 6: fraSettings.Top = 54
+    fraSettings.Width = w: fraSettings.Height = Mx(60, h - 60)
+
+    inner = w - 12
+    boxW = Mx(100, inner - 148)
+    sURL.Width = boxW: sKey.Width = boxW: sModel.Width = boxW: sList.Width = boxW
+    sLang.Width = boxW: sTemp.Width = boxW: sChatTok.Width = boxW
+    sCellTok.Width = boxW: sOvwRows.Width = boxW
+    sValsOnly.Width = Mx(100, inner)
+    sInstr.Width = Mx(100, inner)
 End Sub
 
 
