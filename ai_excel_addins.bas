@@ -23,7 +23,7 @@ Private Const DEF_URL As String = "https://litellm.geotech.user.events/v1/chat/c
 Private Const DEF_MODEL As String = "openai/gpt-5.6-terra"
 Private Const DEF_MODEL_LIST As String = "gti-local/Qwen3.8,geotech/zai/glm-5.3"
 Private Const DEF_LANGUAGE As String = "Russian"
-Private Const DEF_CHAT_MAX_TOKENS As String = "4000"
+Private Const DEF_CHAT_MAX_TOKENS As String = "16000"
 Private Const DEF_CELL_MAX_TOKENS As String = "1000"
 ' Rows per sheet in the "workbook overview" context (0 = no row limit, only MAX_CONTEXT_CHARS)
 Private Const DEF_OVERVIEW_ROWS As String = "200"
@@ -37,6 +37,8 @@ Private Const TIMEOUT_MS As Long = 180000
 
 Public LastAnswer As String
 Public LastUsage As Long
+' True when the model hit max_tokens: the answer (and any actions block) is incomplete
+Public LastTruncated As Boolean
 
 Private mRoles() As String
 Private mTexts() As String
@@ -370,10 +372,19 @@ Public Function SplitActions(ByVal answer As String, ByRef displayText As String
     End If
     If p1 = 0 Then Exit Function
     p2 = InStr(p1 + Len(tag), answer, "```")
-    If p2 = 0 Then p2 = Len(answer) + 1
+    If p2 = 0 Then
+        ' no closing fence: the answer was cut off mid-block, the actions are incomplete
+        displayText = Trim$(Left$(answer, p1 - 1)) & vbLf & TruncatedNote()
+        Exit Function
+    End If
     jsonText = Mid$(answer, p1 + Len(tag), p2 - p1 - Len(tag))
     If p2 + 3 <= Len(answer) Then tail = Mid$(answer, p2 + 3)
     displayText = Trim$(Left$(answer, p1 - 1) & tail)
+
+    If LastTruncated Then
+        displayText = displayText & vbLf & TruncatedNote()
+        Exit Function
+    End If
 
     On Error GoTo Bad
     p = 1
@@ -390,6 +401,10 @@ Public Function SplitActions(ByVal answer As String, ByRef displayText As String
 Bad:
     Set SplitActions = Nothing
     displayText = displayText & vbLf & RU("[\u043D\u0435 \u0443\u0434\u0430\u043B\u043E\u0441\u044C \u043F\u0440\u043E\u0447\u0438\u0442\u0430\u0442\u044C \u043F\u0440\u0435\u0434\u043B\u043E\u0436\u0435\u043D\u043D\u044B\u0435 \u0438\u0437\u043C\u0435\u043D\u0435\u043D\u0438\u044F]")
+End Function
+
+Private Function TruncatedNote() As String
+    TruncatedNote = RU("[!] \u043E\u0442\u0432\u0435\u0442 \u043C\u043E\u0434\u0435\u043B\u0438 \u043E\u0431\u043E\u0440\u0432\u0430\u043D \u043F\u043E \u043B\u0438\u043C\u0438\u0442\u0443 \u0442\u043E\u043A\u0435\u043D\u043E\u0432, \u043F\u0440\u0430\u0432\u043A\u0438 \u041D\u0415 \u043F\u0440\u0438\u043C\u0435\u043D\u0435\u043D\u044B. \u0423\u0432\u0435\u043B\u0438\u0447\u044C\u0442\u0435 \u00AB\u041C\u0430\u043A\u0441. \u0442\u043E\u043A\u0435\u043D\u043E\u0432 \u0432 \u0447\u0430\u0442\u0435\u00BB \u0432 \u043D\u0430\u0441\u0442\u0440\u043E\u0439\u043A\u0430\u0445 \u0438\u043B\u0438 \u043F\u043E\u043F\u0440\u043E\u0441\u0438\u0442\u0435 \u0437\u0430\u043F\u043E\u043B\u043D\u0438\u0442\u044C \u0434\u0438\u0430\u043F\u0430\u0437\u043E\u043D \u043F\u043E \u0447\u0430\u0441\u0442\u044F\u043C.")
 End Function
 
 Public Function ActionsPreview(ByVal actions As Collection) As String
@@ -443,7 +458,9 @@ Private Sub ApplyOne(ByVal a As Object, ByVal batch As Collection)
     Select Case act
         Case "set_values"
             grid = ValuesToGrid(DictItem(a, "values"))
-            Set rng = ResolveRange(DictStr(a, "range")).Cells(1, 1).Resize(UBound(grid, 1), UBound(grid, 2))
+            Set rng = ResolveRange(DictStr(a, "range"))
+            CheckValuesFit rng, grid
+            Set rng = rng.Cells(1, 1).Resize(UBound(grid, 1), UBound(grid, 2))
             CheckUndoSize rng
             SnapshotCells rng, batch, False
             SetFormulaSafe rng, grid
@@ -517,6 +534,18 @@ Private Sub ApplyOne(ByVal a As Object, ByVal batch As Collection)
     End Select
 End Sub
 
+' Declared a real block of cells but supplied fewer/more values: almost always a cut-off
+' or lazy answer, so refuse instead of silently filling only the first rows.
+Private Sub CheckValuesFit(ByVal rng As Range, ByVal grid As Variant)
+    Dim nR As Long, nC As Long
+    If rng.Cells.CountLarge = 1 Then Exit Sub          ' anchor cell: array size wins
+    nR = UBound(grid, 1): nC = UBound(grid, 2)
+    If nR = rng.Rows.Count And nC = rng.Columns.Count Then Exit Sub
+    Err.Raise vbObjectError + 4, , RU("values \u043D\u0435 \u0441\u043E\u0432\u043F\u0430\u0434\u0430\u0435\u0442 \u0441 \u0434\u0438\u0430\u043F\u0430\u0437\u043E\u043D\u043E\u043C: ") & _
+              rng.Address(False, False) & " " & rng.Rows.Count & "x" & rng.Columns.Count & _
+              RU(", \u0430 \u0437\u043D\u0430\u0447\u0435\u043D\u0438\u0439 - ") & nR & "x" & nC
+End Sub
+
 ' Changes that could not be undone are not applied at all
 Private Sub CheckUndoSize(ByVal rng As Range)
     If rng.Cells.CountLarge > MAX_UNDO_CELLS Then
@@ -569,7 +598,7 @@ Private Function DescribeAction(ByVal a As Object, ByVal detailed As Boolean) As
     act = LCase$(DictStr(a, "action"))
     Select Case act
         Case "set_values"
-            d = RU("\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0432 ") & DictStr(a, "range")
+            d = RU("\u0437\u0430\u043F\u0438\u0441\u0430\u0442\u044C \u0432 ") & ValuesTarget(a)
             If detailed Then d = d & ValuesPreview(DictItem(a, "values"))
         Case "set_formula"
             f = DictStr(a, "formula")
@@ -609,6 +638,17 @@ Private Function CellCountOf(ByVal addr As String, ByVal usedOnly As Boolean) As
     Set rng = ResolveRange(addr)
     If usedOnly Then Set rng = Intersect(rng, rng.Worksheet.UsedRange)
     If rng Is Nothing Then CellCountOf = 0 Else CellCountOf = rng.Cells.CountLarge
+Done:
+End Function
+
+' The address set_values really writes to: the declared range shrinks/grows to the array
+Private Function ValuesTarget(ByVal a As Object) As String
+    Dim rng As Range, grid As Variant
+    ValuesTarget = DictStr(a, "range")
+    On Error GoTo Done
+    grid = ValuesToGrid(DictItem(a, "values"))
+    Set rng = ResolveRange(ValuesTarget).Cells(1, 1).Resize(UBound(grid, 1), UBound(grid, 2))
+    ValuesTarget = "'" & rng.Worksheet.Name & "'!" & rng.Address(False, False)
 Done:
 End Function
 
@@ -868,6 +908,12 @@ Private Function SystemPrompt(ByVal agentMode As Boolean) As String
         s = s & "{""action"":""sort"",""range"":""Sheet1!A1:F200"",""key"":""C"",""order"":""desc"",""header"":true}" & vbLf
         s = s & "{""action"":""chart"",""source"":""Sheet1!A1:B13"",""type"":""column"",""title"":""Sales"","
         s = s & """target"":""Sheet1!H2""}  - types: column, bar, line, pie, scatter, area" & vbLf
+        s = s & "set_values must cover EVERY row you were asked about: the number of value rows must equal "
+        s = s & "the number of rows in the range (E2:E39 = 38 rows = 38 values). Never shorten the list, never "
+        s = s & "write '...' or 'and so on'. If the answer would be very long, split it into several set_values "
+        s = s & "actions in the same block (E2:E20, E21:E39) so that together they cover the whole range. "
+        s = s & "If the data you were given is cut off (a '...[N more rows]' marker), say so and ask for the rest "
+        s = s & "instead of guessing. " & vbLf
         s = s & "Rules: always include the sheet name in every range (quote names with spaces: 'My sheet'!A1); "
         s = s & "formulas use English function names and commas; prefer formulas over hardcoded results when "
         s = s & "data may change; never change cells the user did not ask about. "
@@ -886,6 +932,7 @@ Public Function RequestLLM(ByVal messagesJson As String, ByVal model As String, 
                            ByVal maxTokens As Long, Optional ByVal temperature As Double = -1) As String
     On Error GoTo Fail
     LastUsage = 0
+    LastTruncated = False
 
     Dim apiKey As String
     apiKey = Trim$(Setting("ApiKey"))
@@ -924,9 +971,11 @@ Public Function RequestLLM(ByVal messagesJson As String, ByVal model As String, 
 
     LastUsage = JsonNumber(resp, """total_tokens""")
 
-    Dim pos As Long, answer As String
+    Dim pos As Long, answer As String, fin As String
     pos = InStr(1, resp, """choices""")
     If pos = 0 Then pos = 1
+    fin = LCase$(ExtractJsonString(resp, """finish_reason""", pos))
+    If fin = "length" Or fin = "max_tokens" Then LastTruncated = True
     answer = ExtractJsonString(resp, """content""", pos)
     If Len(answer) = 0 Then
         RequestLLM = RU("#ERROR: \u043C\u043E\u0434\u0435\u043B\u044C \u0432\u0435\u0440\u043D\u0443\u043B\u0430 \u043F\u0443\u0441\u0442\u043E\u0439 \u043E\u0442\u0432\u0435\u0442")
